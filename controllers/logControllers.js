@@ -52,29 +52,42 @@ export const getLogs = async (req, res) => {
 
 export const getLogsTime = async (req, res) => {
   try {
+    const { year, month } = req.query;
+
+    if (!year || !month) {
+      return res.status(400).json({ error: "Please provide year and month" });
+    }
+
+    const start = new Date(year, month - 1, 1);
+    const end = new Date(year, month, 1);
+
     const logs = await logData
-      .find()
+      .find({ "logs.timestamp": { $gte: start, $lt: end } })
       .sort({ "logs.timestamp": 1 })
       .select("traceId method endpoint status logs.timestamp");
 
-    const grouped = logs.reduce((groups, log) => {
-      const baseEndpoint = log.endpoint.split("/").slice(0, 3).join("/");
+    const grouped = {};
 
-      if (!groups[baseEndpoint]) {
-        groups[baseEndpoint] = [];
-      }
+    logs.forEach((log) => {
+      const filteredLogs = log.logs.filter(
+        (l) => l.timestamp >= start && l.timestamp < end
+      );
 
-      groups[baseEndpoint].push({
-        traceId: log.traceId,
-        method: log.method,
-        endpoint: log.endpoint,
-        status: log.status,
-        timestamp: log.logs?.[0]?.timestamp,
+      filteredLogs.forEach((l) => {
+        const baseEndpoint = log.endpoint.split("/").slice(0, 3).join("/");
+
+        if (!grouped[baseEndpoint]) grouped[baseEndpoint] = [];
+
+        grouped[baseEndpoint].push({
+          traceId: log.traceId,
+          method: log.method,
+          endpoint: log.endpoint,
+          status: log.status,
+          timestamp: l.timestamp,
+        });
       });
-
-      return groups;
-    }, {});
-
+    });
+    //console.log(grouped);
     res.status(200).json({ message: "Grouped logs", data: grouped });
   } catch (error) {
     res.status(500).json({ status: "error", message: "Failed to fetch logs" });
@@ -86,27 +99,31 @@ export const getAnalysis = async (req, res) => {
     const { year, month } = req.query; // e.g. year=2025, month=09
 
     if (!year || !month) {
-      return res.status(400).json({ error: "Please provide year and month (e.g. ?year=2025&month=09)" });
+      return res
+        .status(400)
+        .json({
+          error: "Please provide year and month (e.g. ?year=2025&month=09)",
+        });
     }
 
     const start = new Date(year, month - 1, 1); // first day of month
-    const end = new Date(year, month, 1);       // first day of next month
+    const end = new Date(year, month, 1); // first day of next month
 
     // ✅ Success count (200, 304)
     const success = await logData.countDocuments({
       status: { $in: [200, 304] },
-      "logs.timestamp": { $gte: start, $lt: end }
+      "logs.timestamp": { $gte: start, $lt: end },
     });
 
     // ✅ Failure count (anything else)
     const fail = await logData.countDocuments({
       status: { $nin: [200, 304] },
-      "logs.timestamp": { $gte: start, $lt: end }
+      "logs.timestamp": { $gte: start, $lt: end },
     });
 
     // ✅ Total logs in that month
     const total = await logData.countDocuments({
-      "logs.timestamp": { $gte: start, $lt: end }
+      "logs.timestamp": { $gte: start, $lt: end },
     });
 
     const uptimePercent = total > 0 ? (success / total) * 100 : 0;
@@ -117,24 +134,26 @@ export const getAnalysis = async (req, res) => {
       {
         $match: {
           status: { $gte: 400, $lt: 600 },
-          "logs.timestamp": { $gte: start, $lt: end }
-        }
+          "logs.timestamp": { $gte: start, $lt: end },
+        },
       },
       {
         $group: {
           _id: "$status",
-          count: { $sum: 1 }
-        }
+          count: { $sum: 1 },
+        },
       },
       { $sort: { count: -1 } },
-      { $limit: 1 }
+      { $limit: 1 },
     ]);
 
     // ✅ Last error log timestamp (4xx/5xx)
-    const lastErrorLog = await logData.findOne({
-      status: { $gte: 400, $lt: 600 },
-      "logs.timestamp": { $gte: start, $lt: end }
-    }).sort({ "logs.timestamp": -1 });
+    const lastErrorLog = await logData
+      .findOne({
+        status: { $gte: 400, $lt: 600 },
+        "logs.timestamp": { $gte: start, $lt: end },
+      })
+      .sort({ "logs.timestamp": -1 });
 
     const lastTimestamp = lastErrorLog?.logs?.[0]?.timestamp || null;
 
@@ -142,16 +161,16 @@ export const getAnalysis = async (req, res) => {
     const timeAgg = await logData.aggregate([
       {
         $match: {
-          "logs.timestamp": { $gte: start, $lt: end }
-        }
+          "logs.timestamp": { $gte: start, $lt: end },
+        },
       },
       {
         $group: {
           _id: null,
           totalResponseTime: { $sum: "$responseTimeMs" },
-          avgResponseTime: { $avg: "$responseTimeMs" }
-        }
-      }
+          avgResponseTime: { $avg: "$responseTimeMs" },
+        },
+      },
     ]);
 
     const totalResponseTime = timeAgg[0]?.totalResponseTime || 0;
@@ -169,12 +188,81 @@ export const getAnalysis = async (req, res) => {
       maxErrorStatus: maxErrorStatus[0] || null,
       lastErrorTimestamp: lastTimestamp,
       totalResponseTime,
-      avgResponseTime
+      avgResponseTime,
     });
-
   } catch (error) {
     res.status(500).json({ status: "error", message: error.message });
   }
 };
+
+export const getUptime = async (req, res) => {
+  try {
+    const { year, month } = req.query;
+
+    if (!year || !month) {
+      return res
+        .status(400)
+        .json({
+          error: "Please provide year and month (e.g. ?year=2025&month=09)",
+        });
+    }
+
+    const start = new Date(year, month - 1, 1); // first day of month
+    const end = new Date(year, month, 1); // first day of next month
+
+    // Step 1: Get all logs for that month
+    const logs = await logData
+      .find({
+        "logs.timestamp": { $gte: start, $lt: end },
+      })
+      .lean();
+
+    //console.log(logs)
+
+    // Step 2: Group by day
+    const dayMap = new Map();
+
+    logs.forEach((log) => {
+      const date = new Date(log.logs[0].timestamp);
+      const day = date.getDate(); // 1–31
+
+      if (!dayMap.has(day)) {
+        dayMap.set(day, { total: 0, success: 0 });
+      }
+
+      const entry = dayMap.get(day);
+      entry.total += 1;
+
+      // ✅ success if status is 200 or 304
+      if ([200, 304].includes(log.status)) {
+        entry.success += 1;
+      }
+    });
+
+    //console.log(dayMap)
+
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const filledStats = [];
+
+    for (let d = 1; d <= daysInMonth; d++) {
+      const entry = dayMap.get(d);
+      let uptimePercent = null;
+
+      if (entry) {
+        uptimePercent = (entry.success / entry.total) * 100;
+      }
+
+      filledStats.push({
+        date: new Date(year, month - 1, d + 1),
+        uptimePercent: uptimePercent ?? 0, // can also return null
+      });
+    }
+    //console.log(filledStats)
+    res.json(filledStats);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 
 
