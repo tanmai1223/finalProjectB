@@ -10,7 +10,7 @@ dotenv.config();
 db();
 app.use(
   cors({
-    origin: "https://apimanaging.netlify.app/", // React app URL
+    origin: "https://apimanaging.netlify.app", // React app URL
     credentials: true, // only if you're using cookies
     allowedHeaders: ['Content-Type', 'Authorization'],
   })
