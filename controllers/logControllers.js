@@ -207,7 +207,7 @@ export const getUptime = async (req, res) => {
         });
     }
 
-    const start = new Date(year, month , 1); // first day of month
+    const start = new Date(year, month-1, 1); // first day of month
     const end = new Date(year, month, 1); // first day of next month
 
     // Step 1: Get all logs for that month
@@ -253,7 +253,7 @@ export const getUptime = async (req, res) => {
       }
 
       filledStats.push({
-        date: new Date(year, month - 1, d + 1),
+        date: new Date(year, month - 1, d ),
         uptimePercent: uptimePercent ?? 0, // can also return null
       });
     }
